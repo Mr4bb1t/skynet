@@ -167,16 +167,17 @@ def relative_age(value: str, *, now: Optional[datetime] = None) -> str:
         return ""
     current = now or now_local()
     local = parsed.astimezone(local_tz())
-    days = (local.date() - current.astimezone(local_tz()).date()).days
-    if days == 0:
+    # delta > 0 = data no futuro; delta < 0 = data no passado.
+    delta_days = (local.date() - current.astimezone(local_tz()).date()).days
+    if delta_days == 0:
         return "hoje"
-    if days == 1:
-        return "ontem"
-    if days == -1:
+    if delta_days == 1:
         return "amanhã"
-    if days > 1:
-        return f"há {days} dias"
-    return f"em {abs(days)} dias"
+    if delta_days == -1:
+        return "ontem"
+    if delta_days > 1:
+        return f"em {delta_days} dias"
+    return f"há {abs(delta_days)} dias"
 
 
 def format_when(value: str, *, now: Optional[datetime] = None) -> str:

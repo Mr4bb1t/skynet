@@ -346,3 +346,4 @@ Distribuído sob a licença **MIT**. Consulte `LICENSE` para mais informações.
 <p align="center">
   Desenvolvido com ☕, Python e IA por <strong><a href="https://github.com/Mr4bb1t">Mr4bb1t</a></strong>
 </p>
+

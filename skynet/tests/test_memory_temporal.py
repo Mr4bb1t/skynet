@@ -264,6 +264,21 @@ class TemporalMemoryTest(unittest.TestCase):
         self.assertTrue(parsed.startswith("2026-11-11"))
         self.assertEqual(parse_when("data inventada"), "")
 
+    def test_relative_age_past_and_future_are_not_inverted(self) -> None:
+        from memory.timeutil import format_when, relative_age
+
+        self.assertEqual(relative_age(YESTERDAY, now=NOW), "ontem")
+        self.assertEqual(relative_age(TOMORROW, now=NOW), "amanhã")
+        self.assertEqual(relative_age("2026-11-08", now=NOW), "há 3 dias")
+        self.assertEqual(relative_age(NEXT_WEEK, now=NOW), "em 7 dias")
+        self.assertEqual(relative_age("2026-11-11", now=NOW), "hoje")
+        self.assertEqual(
+            format_when(YESTERDAY, now=NOW), "10/11/2026 (ontem)"
+        )
+        self.assertEqual(
+            format_when(TOMORROW, now=NOW), "12/11/2026 (amanhã)"
+        )
+
     def test_now_excludes_past_events(self) -> None:
         self.remember(
             "João esteve na sala",
