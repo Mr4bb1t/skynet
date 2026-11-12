@@ -1,0 +1,20 @@
+# Segredos - nunca versionar
+.env
+skynet/.env
+**/.env
+!**/.env.example
+configs.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Saidas de diagnostico e testes
+*.csv
+*.log
+skynet/vision_storage/
+skynet/data/

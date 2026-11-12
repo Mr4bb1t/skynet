@@ -1,0 +1,196 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# SKYNET ROBOT - CLI & Service Manager (com suporte a TMUX para terminal ativo)
+# Permite rodar o Skynet de qualquer pasta ou gerenciar como servico de background.
+# ==============================================================================
+
+DIR="/root/skynet"
+PIDFILE="/var/run/skynet.pid"
+LOGFILE="/var/log/skynet.log"
+PYTHON="/usr/bin/python3"
+TMUX_SESSION="skynet"
+
+cd "$DIR" || exit 1
+
+is_running() {
+    if tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
+        return 0
+    fi
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+        return 0
+    fi
+    if pgrep -f "python3.*main.py" >/dev/null 2>&1; then
+        return 0
+    fi
+    return 1
+}
+
+# Sincroniza o relogio (NTP/HTTP) ANTES de subir o Skynet. Sem isso o box pode
+# acordar com a data da imagem e o TLS do Gemini falha com "certificate is not
+# yet valid". Tambem aplica o fuso de Londrina (America/Sao_Paulo).
+ensure_time() {
+    case "${SKYNET_SKIP_TIME_SYNC:-0}" in
+        1|true|yes|on) return 0 ;;
+    esac
+
+    local syncer=""
+    if [ -f /root/sync_time.py ]; then
+        syncer="/root/sync_time.py"
+    elif [ -f "$DIR/scripts/sync_time.py" ]; then
+        syncer="$DIR/scripts/sync_time.py"
+    fi
+
+    if [ -z "$syncer" ]; then
+        echo "⚠️  sync_time.py nao encontrado; seguindo sem sincronizar a hora."
+        return 0
+    fi
+
+    echo "🕒 Sincronizando relogio com a internet (${SKYNET_TIMEZONE:-America/Sao_Paulo})..."
+    local output rc
+    output=$("$PYTHON" "$syncer" --timezone "${SKYNET_TIMEZONE:-America/Sao_Paulo}" 2>&1)
+    rc=$?
+    if [ -n "$output" ]; then
+        printf '%s\n' "$output"
+        # O watchdog descarta o stdout do wrapper; deixa rastro no log.
+        printf '%s [hora] %s\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')" "$output" >> "$LOGFILE" 2>/dev/null || true
+    fi
+    if [ "$rc" -eq 0 ]; then
+        return 0
+    fi
+
+    echo "⚠️  Nao foi possivel sincronizar a hora pela internet."
+    if [ "${SKYNET_ALLOW_STALE_TIME:-0}" = "1" ]; then
+        echo "   SKYNET_ALLOW_STALE_TIME=1: iniciando mesmo assim."
+        return 0
+    fi
+
+    echo "   Skynet NAO sera iniciado agora: relogio errado quebra o TLS do Gemini."
+    echo "   O watchdog tentara de novo. Para ignorar: export SKYNET_ALLOW_STALE_TIME=1"
+    return 1
+}
+
+case "$1" in
+    start)
+        if is_running; then
+            echo "● Skynet já está em execução."
+            echo "  Para ver o terminal ativo: skynet attach"
+            exit 0
+        fi
+
+        ensure_time || exit 1
+
+        echo "Iniciando Skynet Robot em segundo plano (sessão tmux '$TMUX_SESSION')..."
+        touch "$LOGFILE"
+
+        # Inicia sessão tmux desacoplada rodando o main.py
+        tmux new-session -d -s "$TMUX_SESSION" -c "$DIR" "$PYTHON $DIR/main.py"
+        sleep 1
+
+        # Espelha saída para o log
+        tmux pipe-pane -o -t "$TMUX_SESSION" "cat >> $LOGFILE" 2>/dev/null || true
+
+        PY_PID=$(pgrep -f "python3.*main.py" | head -n 1)
+        if [ -n "$PY_PID" ]; then
+            echo "$PY_PID" > "$PIDFILE"
+            echo "✅ Skynet iniciado com sucesso (PID $PY_PID em tmux '$TMUX_SESSION')."
+            echo "  * Para ver o terminal ativo em tempo real: skynet attach (ou skynet view)"
+            echo "  * Para sair do terminal sem parar o robô: aperte [Ctrl+B] e depois [D]"
+            echo "  * Para ver logs estáticos: skynet log"
+        else
+            echo "❌ Falha ao iniciar. Verifique com 'skynet log'."
+            exit 1
+        fi
+        ;;
+
+    attach|view|console|term|terminal)
+        if ! tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
+            if pgrep -f "python3.*main.py" >/dev/null 2>&1; then
+                echo "O Skynet está rodando fora do tmux. Exibindo logs em tempo real:"
+                exec tail -f "$LOGFILE"
+            else
+                echo "○ Skynet não está rodando no momento."
+                echo "  Para iniciar: skynet start"
+                exit 1
+            fi
+        fi
+
+        echo "------------------------------------------------------------"
+        echo " Conectando ao terminal ativo do Skynet Robot..."
+        echo " 💡 DICA: Para sair desta tela SEM PARAR o robô:"
+        echo "    Pressione [Ctrl+B] e solte, depois aperte a tecla [D]"
+        echo "------------------------------------------------------------"
+        sleep 1
+        exec tmux attach-session -t "$TMUX_SESSION"
+        ;;
+
+    stop)
+        echo "Parando Skynet Robot..."
+        if tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
+            tmux kill-session -t "$TMUX_SESSION" 2>/dev/null
+        fi
+
+        if [ -f "$PIDFILE" ]; then
+            PID=$(cat "$PIDFILE")
+            kill "$PID" 2>/dev/null || true
+            rm -f "$PIDFILE"
+        fi
+
+        PIDS=$(pgrep -f "python3.*main.py" 2>/dev/null)
+        if [ -n "$PIDS" ]; then
+            kill $PIDS 2>/dev/null || true
+            sleep 0.5
+            kill -9 $PIDS 2>/dev/null || true
+        fi
+        echo "Skynet parado."
+        ;;
+
+    restart)
+        "$0" stop
+        sleep 1
+        "$0" start
+        ;;
+
+    status)
+        if tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
+            echo "● Skynet Robot está ATIVO (sessão tmux '$TMUX_SESSION')."
+            echo "  Use 'skynet attach' para ver o terminal em tempo real."
+            echo ""
+            echo "Últimas linhas do log ($LOGFILE):"
+            tail -n 10 "$LOGFILE" 2>/dev/null
+        elif pgrep -f "python3.*main.py" >/dev/null 2>&1; then
+            echo "● Skynet está rodando (PID: $(pgrep -f 'python3.*main.py'))."
+        else
+            echo "○ Skynet Robot está PARADO."
+        fi
+        ;;
+
+    log|logs)
+        if [ ! -f "$LOGFILE" ]; then
+            touch "$LOGFILE"
+        fi
+        echo "Acompanhando logs de $LOGFILE (Ctrl+C para sair)..."
+        tail -f "$LOGFILE"
+        ;;
+
+    "")
+        # Sem argumentos: se estiver rodando em background, conecta no terminal ativo
+        if tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
+            echo "Conectando ao terminal ativo do Skynet..."
+            echo "💡 Para sair sem parar o robô: aperte [Ctrl+B] e depois [D]"
+            sleep 1
+            exec tmux attach-session -t "$TMUX_SESSION"
+        elif is_running; then
+            echo "Skynet já está rodando. Use 'skynet log' ou 'skynet status'."
+        else
+            # Execução interativa direta no terminal atual
+            ensure_time || exit 1
+            exec "$PYTHON" "$DIR/main.py"
+        fi
+        ;;
+
+    *)
+        # Execução interativa direta passando parâmetros (ex: skynet --config)
+        ensure_time || exit 1
+        exec "$PYTHON" "$DIR/main.py" "$@"
+        ;;
+esac

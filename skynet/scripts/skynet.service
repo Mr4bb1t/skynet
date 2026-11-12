@@ -1,0 +1,17 @@
+[Unit]
+Description=Skynet Robot Multimodal Voice & Vision Agent
+After=network.target sound.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/skynet
+ExecStart=/usr/local/bin/skynet
+Restart=always
+RestartSec=5
+StandardOutput=append:/var/log/skynet.log
+StandardError=append:/var/log/skynet.log
+
+[Install]
+WantedBy=multi-user.target
+
