@@ -11,7 +11,7 @@ from typing import Any
 
 from google.genai import types
 
-from .store import VALID_KINDS
+from .store import MEMORY_STATUS, MEMORY_TYPES, VALID_KINDS, VERIFICATION_STATUS
 
 LOG = logging.getLogger("memory.tools")
 
@@ -22,21 +22,29 @@ REMEMBER_DECLARATION = types.FunctionDeclaration(
     description=(
         "Guarda uma memória durável na memória de longo prazo. Use quando o "
         "usuário contar algo importante ou durável: pessoas, animais, projetos, "
-        "ideias, decisões, acontecimentos, preferências, lugares, objetos ou "
-        "tarefas. Seja específico e conciso (uma frase). Não guarde trivialidades, "
-        "saudações nem o JSON de rostos. Para atualizar algo existente, passe "
-        "memory_id."
+        "ideias, decisões, acontecimentos, preferências, lugares, objetos, "
+        "tarefas e planos. Seja específico e conciso (uma frase). "
+        "SEMPRE classifique o tipo temporal: event (aconteceu), plan/task "
+        "(futuro), fact/preference/relationship/routine (conhecimento). "
+        "Para eventos, informe `when` (ex.: 'ontem', '2026-11-10') — NUNCA "
+        "invente uma data. Não guarde trivialidades, saudações nem o JSON de "
+        "rostos. Para atualizar algo que mudou, passe memory_id e supersede=true."
     ),
     parameters=types.Schema(
         type=types.Type.OBJECT,
         properties={
             "content": types.Schema(
                 type=types.Type.STRING,
-                description="O fato em uma frase curta e completa.",
+                description="O fato/acontecimento em uma frase curta e completa.",
+            ),
+            "memory_type": types.Schema(
+                type=types.Type.STRING,
+                description="Categoria temporal da memória.",
+                enum=list(MEMORY_TYPES),
             ),
             "kind": types.Schema(
                 type=types.Type.STRING,
-                description="Categoria da memória.",
+                description="Categoria legada (pessoa, projeto, evento...).",
                 enum=_KIND_ENUM,
             ),
             "subject": types.Schema(
@@ -50,9 +58,57 @@ REMEMBER_DECLARATION = types.FunctionDeclaration(
                 type=types.Type.STRING,
                 description="Palavras-chave separadas por vírgula.",
             ),
+            "when": types.Schema(
+                type=types.Type.STRING,
+                description=(
+                    "Quando o acontecimento ocorreu/começou. ISO 8601 ou "
+                    "relativo ('hoje', 'ontem', 'há 3 dias', 'amanhã'). "
+                    "Para fatos atemporais, deixe vazio."
+                ),
+            ),
+            "event_end": types.Schema(
+                type=types.Type.STRING,
+                description="Fim do acontecimento, se durou um período.",
+            ),
+            "valid_from": types.Schema(
+                type=types.Type.STRING,
+                description="Início da validade de um fato/estado/preferência.",
+            ),
+            "valid_until": types.Schema(
+                type=types.Type.STRING,
+                description="Fim da validade (quando deixou de ser verdade).",
+            ),
+            "expires_at": types.Schema(
+                type=types.Type.STRING,
+                description="Expiração de um estado temporário.",
+            ),
             "importance": types.Schema(
                 type=types.Type.NUMBER,
                 description="Importância de 0 a 1 (padrão 0.5).",
+            ),
+            "confidence": types.Schema(
+                type=types.Type.NUMBER,
+                description="Confiança de 0 a 1 (padrão 0.8).",
+            ),
+            "verification_status": types.Schema(
+                type=types.Type.STRING,
+                description=(
+                    "confirmed = o usuário afirmou; inferred = você deduziu; "
+                    "uncertain = dúvida. Inferências NÃO são fatos confirmados."
+                ),
+                enum=list(VERIFICATION_STATUS),
+            ),
+            "status": types.Schema(
+                type=types.Type.STRING,
+                description="Estado de planos/tarefas (active, done, cancelled...).",
+                enum=["active", "done", "cancelled", "uncertain"],
+            ),
+            "supersede": types.Schema(
+                type=types.Type.BOOLEAN,
+                description=(
+                    "true quando a informação mudou: preserva o registro antigo "
+                    "como histórico e cria um novo. Use com memory_id."
+                ),
             ),
             "memory_id": types.Schema(
                 type=types.Type.INTEGER,
@@ -69,7 +125,7 @@ RECALL_DECLARATION = types.FunctionDeclaration(
         "Busca memórias relevantes por consulta. Use antes de responder sobre "
         "algo do passado, ao ouvir o nome de alguém/algo já conhecido, ou quando "
         "precisar de contexto. Retorna só as memórias mais relevantes, nunca "
-        "todas."
+        "todas, e sempre com data/validade. Memórias antigas NÃO são o agora."
     ),
     parameters=types.Schema(
         type=types.Type.OBJECT,
@@ -82,6 +138,24 @@ RECALL_DECLARATION = types.FunctionDeclaration(
                 type=types.Type.STRING,
                 description="Filtra por categoria (opcional).",
                 enum=_KIND_ENUM,
+            ),
+            "time_range": types.Schema(
+                type=types.Type.STRING,
+                description=(
+                    "Janela temporal: any, now, today, yesterday, week, "
+                    "last_week, month, last_month, past, future."
+                ),
+                enum=[
+                    "any", "now", "today", "yesterday", "week", "last_week",
+                    "month", "last_month", "past", "future",
+                ],
+            ),
+            "include_history": types.Schema(
+                type=types.Type.BOOLEAN,
+                description=(
+                    "Inclui registros substituídos/expirados (para histórico). "
+                    "Padrão false."
+                ),
             ),
             "limit": types.Schema(
                 type=types.Type.INTEGER,
@@ -167,6 +241,15 @@ class MemoryTool:
             importance = float(args.get("importance", 0.5))
         except (TypeError, ValueError):
             importance = 0.5
+        try:
+            confidence = float(args.get("confidence", 0.8))
+        except (TypeError, ValueError):
+            confidence = 0.8
+        supersede = args.get("supersede", False)
+        if isinstance(supersede, str):
+            supersede = supersede.strip().lower() in ("1", "true", "yes", "on")
+        else:
+            supersede = bool(supersede)
         result = self.manager.remember(
             content,
             kind=str(args.get("kind", "fact") or "fact"),
@@ -174,13 +257,24 @@ class MemoryTool:
             tags=str(args.get("tags", "") or ""),
             importance=importance,
             memory_id=memory_id,
+            memory_type=str(args.get("memory_type", "") or ""),
+            event_time=str(args.get("when", "") or args.get("event_time", "") or ""),
+            event_end=str(args.get("event_end", "") or ""),
+            valid_from=str(args.get("valid_from", "") or ""),
+            valid_until=str(args.get("valid_until", "") or ""),
+            expires_at=str(args.get("expires_at", "") or ""),
+            status=str(args.get("status", "active") or "active"),
+            confidence=confidence,
+            verification_status=str(args.get("verification_status", "") or ""),
+            supersede=supersede,
         )
         if result.get("status") == "ok":
             LOG.info(
-                "Memória %s: #%s [%s] %s",
-                "atualizada" if result.get("updated") else "salva",
+                "Memória %s: #%s [%s/%s] %s",
+                "substituída" if supersede else ("atualizada" if result.get("updated") else "salva"),
                 result.get("memory_id"),
-                result.get("kind"),
+                result.get("memory_type") or result.get("kind"),
+                result.get("memory_status", "active"),
                 result.get("subject", ""),
             )
         return result
@@ -198,7 +292,19 @@ class MemoryTool:
         except (TypeError, ValueError):
             limit = 5
         limit = max(1, min(8, limit))
-        result = self.manager.recall(query, kinds=kinds, limit=limit)
+        time_range = str(args.get("time_range", "") or "").strip().lower() or None
+        include_history = args.get("include_history", False)
+        if isinstance(include_history, str):
+            include_history = include_history.strip().lower() in ("1", "true", "yes", "on")
+        else:
+            include_history = bool(include_history)
+        result = self.manager.recall(
+            query,
+            kinds=kinds,
+            temporal_intent=time_range,
+            include_history=include_history,
+            limit=limit,
+        )
         if result.get("status") != "ok":
             return result
         memories = result.get("memories", [])

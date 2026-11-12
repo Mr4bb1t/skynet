@@ -20,6 +20,7 @@ import os
 import sys
 import threading
 import time
+import uuid
 from collections import deque
 from contextlib import suppress
 from typing import Optional
@@ -216,9 +217,20 @@ DEFAULT_EMBODIED_INSTRUCTION = (
     "- Você tem memória persistente com busca semântica (RAG). Use `remember_memory` para guardar fatos "
     "duráveis e úteis: pessoas, animais, projetos, ideias, decisões, acontecimentos, preferências, lugares, "
     "objetos e tarefas. Uma memória = um fato curto e específico, com subject e tags.\n"
-    "- Não guarde trivialidades, saudações nem o JSON de rostos. Para atualizar algo, passe memory_id.\n"
-    "- Antes de responder sobre o passado, use `recall_memory` com uma consulta específica. Um bloco "
-    "'Memórias relevantes' pode chegar junto da foto: use só se ajudar e nunca recite o bloco inteiro.\n"
+    "- Classifique SEMPRE o tipo temporal: `event` para o que aconteceu (informe `when`), "
+    "`plan`/`task` para o futuro, `fact`/`preference`/`relationship`/`routine` para conhecimento. "
+    "Nunca invente datas: se não souber quando aconteceu, deixe `when` vazio.\n"
+    "- Se uma informação mudou, use `memory_id` + `supersede=true`; o registro antigo vira histórico.\n"
+    "- Não guarde trivialidades, saudações nem o JSON de rostos.\n"
+    "- Antes de responder sobre o passado, use `recall_memory` com uma consulta específica e, se "
+    "souber, um `time_range`. Os blocos CURRENT STATE / EPISODIC MEMORIES / SEMANTIC KNOWLEDGE / "
+    "FUTURE PLANS podem chegar junto da foto: use só se ajudar e nunca recite o bloco inteiro.\n"
+    "- SOMENTE CURRENT STATE representa o estado atual do ambiente e da sessão. Memórias episódicas "
+    "representam acontecimentos passados. Conhecimento semântico representa informações armazenadas "
+    "cuja validade deve ser respeitada. Planos representam intenções futuras, não acontecimentos "
+    "realizados. Nunca transforme uma memória histórica em observação presente.\n"
+    "- A presença de uma pessoa AGORA vem da percepção visual atual, nunca de uma memória antiga de "
+    "reconhecimento facial.\n"
     "- Use `forget_memory` somente quando o usuário pedir explicitamente para esquecer.\n\n"
 
     "## PERSONALIDADE\n"
@@ -368,6 +380,9 @@ class VoiceAgent:
         self.long_memory = None
         self.memory_tool = None
         self._conversation: deque[str] = deque(maxlen=16)
+        self._session_id = uuid.uuid4().hex
+        self._turns_since_consolidation = 0
+        self._final_consolidation_started = False
         self._last_user_text = ""
         self._input_chunks: list[str] = []
         self._assistant_chunks: list[str] = []
@@ -622,6 +637,53 @@ class VoiceAgent:
         joined = " ".join(parts).strip()
         return joined[-max_chars:] if len(joined) > max_chars else joined
 
+    def _record_turn(self, role: str, text: str) -> None:
+        """Alimenta a working memory (curto prazo) com a fala finalizada."""
+        text = (text or "").strip()
+        if not text:
+            return
+        if self.long_memory is not None:
+            self.long_memory.working.add_turn(role, text)
+            if role == "user":
+                self.long_memory.working.set_state(
+                    "active_task", text, ttl_seconds=600
+                )
+        self._turns_since_consolidation += 1
+        if (
+            self.long_memory is not None
+            and getattr(self.long_memory, "available", False)
+            and self._turns_since_consolidation
+            >= getattr(self.long_memory.config, "consolidate_every_turns", 10)
+        ):
+            self._turns_since_consolidation = 0
+            try:
+                asyncio.create_task(self._consolidate_memory())
+            except RuntimeError:
+                pass
+
+    async def _consolidate_memory(self) -> None:
+        """Consolida a conversa recente em memórias duráveis (Fase 3)."""
+        if self.long_memory is None or not getattr(self.long_memory, "available", False):
+            return
+        text = "\n".join(self._conversation)
+        if not text.strip():
+            return
+        try:
+            result = await asyncio.to_thread(
+                self.long_memory.consolidate,
+                text,
+                session_id=self._session_id,
+            )
+            if result.get("created") or result.get("updated") or result.get("superseded"):
+                LOG.info(
+                    "Consolidação de memória: criadas=%s atualizadas=%s substituídas=%s",
+                    result.get("created", 0),
+                    result.get("updated", 0),
+                    result.get("superseded", 0),
+                )
+        except Exception as exc:
+            LOG.warning("Consolidação de memória falhou: %s", exc)
+
     @staticmethod
     def _people_from_faces(faces: dict) -> list[dict]:
         people = []
@@ -643,6 +705,11 @@ class VoiceAgent:
             return ""
         people = self._people_from_faces(faces)
         conversation = self._conversation_text() if include_conversation else ""
+        # Presença atual: mesmo quando ninguém é reconhecido, limpa a lista.
+        names = [str(item.get("name", "")) for item in people if item.get("name")]
+        working = getattr(self.long_memory, "working", None)
+        if working is not None:
+            working.set_people(names)
         if not people and not conversation:
             return ""
         return self.long_memory.build_context(
@@ -977,6 +1044,7 @@ class VoiceAgent:
                             self._input_chunks.clear()
                             if final:
                                 self._conversation.append("Usuário: " + final)
+                                self._record_turn("user", final)
                                 LOG.debug("Transcrição do usuário: %s", final)
 
                     # Transcrição textual da fala
@@ -988,6 +1056,7 @@ class VoiceAgent:
                             self._assistant_chunks.clear()
                             if final:
                                 self._conversation.append("SKYNET: " + final)
+                                self._record_turn("assistant", final)
                         if not self._tui_active:
                             if first_token:
                                 sys.stdout.write("\n🤖 SKYNET: ")
@@ -1026,11 +1095,13 @@ class VoiceAgent:
                             self._input_chunks.clear()
                             if final:
                                 self._conversation.append("Usuário: " + final)
+                                self._record_turn("user", final)
                         if self._assistant_chunks:
                             final = "".join(self._assistant_chunks).strip()
                             self._assistant_chunks.clear()
                             if final:
                                 self._conversation.append("SKYNET: " + final)
+                                self._record_turn("assistant", final)
                         if not first_token and not self._tui_active:
                             sys.stdout.write("\n")
                             sys.stdout.flush()
@@ -1129,6 +1200,15 @@ class VoiceAgent:
                 except Exception:
                     pass
 
+    def _system_instruction_now(self) -> str:
+        """Inclui a data/hora local no prompt para interpretar 'hoje/ontem'."""
+        from memory.timeutil import TZ_NAME, format_now
+
+        return (
+            f"{self.system_instruction}\n\n"
+            f"Data/hora atual: {format_now()} ({TZ_NAME})."
+        )
+
     async def run(self) -> None:
         """Inicia a sessão de conversa multimodal interativa."""
         self._running = True
@@ -1142,7 +1222,7 @@ class VoiceAgent:
         config = types.LiveConnectConfig(
             response_modalities=[types.Modality.AUDIO],
             system_instruction=types.Content(
-                parts=[types.Part(text=self.system_instruction)]
+                parts=[types.Part(text=self._system_instruction_now())]
             ),
             input_audio_transcription=(
                 types.AudioTranscriptionConfig() if input_transcription else None
@@ -1203,3 +1283,18 @@ class VoiceAgent:
             self.camera.stop()
         self.player.close()
         self.aec.close()
+        # Consolidação final best-effort (não bloqueia o encerramento).
+        if (
+            not self._final_consolidation_started
+            and self.long_memory is not None
+            and getattr(self.long_memory, "available", False)
+            and self._conversation
+        ):
+            self._final_consolidation_started = True
+            text = "\n".join(self._conversation)
+            threading.Thread(
+                target=self.long_memory.consolidate,
+                args=(text,),
+                kwargs={"session_id": self._session_id},
+                daemon=True,
+            ).start()

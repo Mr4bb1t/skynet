@@ -133,12 +133,15 @@ JSON acompanha a foto sob demanda (`capture_image`), a foto automática após
 movimentos do PTZ e os frames da visão contínua (a cada ~5 s). Ferramentas do
 chat: `remember_person`, `recall_person`, `list_people` e `forget_person`.
 
-Além das pessoas, existe uma **memória de longo prazo com RAG** em
-`data/memory.db`: animais, acontecimentos, projetos, ideias, preferências,
-lugares e tarefas. A IA decide o que guardar (`remember_memory`), consulta sob
-demanda (`recall_memory`) e só recebe um bloco compacto de memórias relevantes
-para a conversa + rostos reconhecidos, dentro de um orçamento de tokens. Veja
-[`memory/README.md`](memory/README.md).
+Além das pessoas, existe uma **memória temporal de longo prazo com RAG** em
+`data/memory.db`: acontecimentos datados, fatos/preferências com validade,
+planos/tarefas futuras e uma **working memory** da sessão atual (RAM, TTL 30
+min). O contexto é entregue em quatro blocos explícitos — `CURRENT STATE`,
+`EPISODIC MEMORIES`, `SEMANTIC KNOWLEDGE` e `FUTURE PLANS` — para o modelo não
+confundir coisa velha com o agora. O conhecimento antigo não é sobrescrito:
+quando muda, o registro anterior vira histórico (`superseded`) e um novo entra
+com `valid_from`. A conversa também é consolidada automaticamente a cada ~10
+turnos. Veja [`memory/README.md`](memory/README.md).
 
 Documentação completa (configuração, testes 1–8, systemd, memória e
 diagnóstico): [`vision/README.md`](vision/README.md).

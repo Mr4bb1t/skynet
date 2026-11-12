@@ -12,6 +12,7 @@ O banco fica em `data/memory.db` (configurável por `MEMORY_DB_PATH`).
 """
 
 from .config import MemoryConfig
+from .consolidate import MemoryConsolidator
 from .embeddings import (
     EmbeddingBatch,
     EmbeddingError,
@@ -20,8 +21,9 @@ from .embeddings import (
     ResilientEmbedder,
     build_embedder,
 )
-from .rag import MemoryManager
-from .store import VALID_KINDS, MemoryStore, normalize_kind
+from .rag import MemoryManager, format_memory_line
+from .store import MEMORY_TYPES, VALID_KINDS, MemoryStore, normalize_kind
+from .working import WorkingMemory
 from .tools import (
     FORGET_DECLARATION,
     MEMORY_DECLARATIONS,
@@ -32,6 +34,7 @@ from .tools import (
 
 __all__ = [
     "MemoryConfig",
+    "MemoryConsolidator",
     "MemoryManager",
     "MemoryStore",
     "MemoryTool",
@@ -40,6 +43,9 @@ __all__ = [
     "RECALL_DECLARATION",
     "FORGET_DECLARATION",
     "VALID_KINDS",
+    "MEMORY_TYPES",
+    "WorkingMemory",
+    "format_memory_line",
     "normalize_kind",
     "build_embedder",
     "HashingEmbedder",

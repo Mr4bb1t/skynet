@@ -1,68 +1,144 @@
-# Memória de longo prazo (RAG local)
+# Memória temporal (curto + longo prazo)
 
-Sistema de memória persistente para o chat de texto e para o agente de voz.
-A IA decide **o que guardar**, **o que consultar** e **o que usar** na conversa.
-Nada é enviado por inteiro ao modelo: a recuperação é híbrida e limitada por
-orçamento de tokens.
+Princípio da arquitetura:
 
-## O que é guardado
+> **Memória não é percepção. Percepção não é conhecimento. Conhecimento não é estado atual.**
 
-Qualquer memória durável: pessoas, animais, acontecimentos, projetos, ideias,
-preferências, fatos, lugares, objetos e tarefas.
+O sistema não guarda tudo no mesmo “saco”: ele separa o que está acontecendo
+agora do que aconteceu, do que é conhecimento durável e do que é plano futuro.
+O banco continua sendo um único SQLite, com separação lógica por tipo temporal.
 
-Cada memória tem:
+## As quatro camadas
+
+| Camada | O que guarda | Onde vive | Como aparece no prompt |
+|---|---|---|---|
+| **Working Memory** | últimas falas, tarefa ativa, pessoas visíveis, estado da sessão | RAM (`memory/working.py`), TTL 30 min (configurável) | bloco `CURRENT STATE` |
+| **Episodic** | acontecimentos passados, sempre com data | SQLite (`memory_type='event'`) | bloco `EPISODIC MEMORIES` |
+| **Semantic** | fatos, preferências, relações, rotinas | SQLite (`fact/preference/relationship/routine`) | bloco `SEMANTIC KNOWLEDGE` |
+| **Plans / Tasks** | intenções, compromissos e tarefas futuras | SQLite (`plan/task`) | bloco `FUTURE PLANS` |
+
+A presença de uma pessoa no `CURRENT STATE` vem **somente da percepção visual
+atual** (foto/rosto reconhecido agora), nunca de uma memória antiga.
+
+## Banco (schema v2)
+
+Além dos campos antigos (`kind`, `subject`, `content`, `tags`, `importance`,
+`source`, `metadata`, `created_at`, `updated_at`), cada memória tem:
 
 | Campo | Uso |
 |---|---|
-| `kind` | `person`, `animal`, `event`, `project`, `idea`, `preference`, `fact`, `place`, `object`, `task`, `other` |
-| `subject` | entidade principal (`João`, `Rex`, `Skynet`). Pode ter várias separadas por vírgula |
-| `content` | o fato em uma frase curta |
-| `tags` | palavras-chave para busca |
-| `importance` | 0 a 1, usada no ranking |
-| `memory_id` | usado para atualizar uma memória existente |
+| `memory_type` | `fact`, `event`, `plan`, `task`, `preference`, `relationship`, `routine`, `state` |
+| `event_time` | quando o acontecimento ocorreu/começou |
+| `event_end` | quando terminou (eventos com duração) |
+| `valid_from` / `valid_until` | início/fim da validade de um fato/estado |
+| `last_confirmed_at` | última confirmação/salvamento |
+| `expires_at` | expiração de estados temporários |
+| `temporal_scope` | `instant`, `interval`, `timeless`, `unknown` |
+| `status` | `active`, `done`, `cancelled`, `superseded`, `expired`, `uncertain` |
+| `confidence` | 0 a 1 |
+| `verification_status` | `confirmed`, `inferred`, `uncertain` |
+| `session_id` | sessão que originou a memória |
+| `supersedes_id` | memória antiga que esta substitui |
 
-## Banco
+> **`created_at` ≠ `event_time`.** `created_at` é quando a memória foi salva;
+> `event_time` é quando o acontecimento ocorreu. Registros antigos migrados
+> ficam com `temporal_scope='unknown'` e `event_time=''` — o sistema **não
+> inventa** uma data de acontecimento a partir de `created_at`.
 
-SQLite em `data/memory.db` (configurável):
+A migração v1 → v2 é automática e não apaga registros. Faça backup de
+`data/memory.db` antes de atualizar o box.
 
-- tabela `memories` com conteúdo, importância, uso e embedding;
-- tabela `memory_entities` para busca por pessoa/animal/projeto;
-- tabela virtual `memories_fts` (FTS5) para busca lexical;
-- `memory_meta` para versão do schema.
+## Quatro blocos de contexto
 
-## RAG híbrido
+`MemoryManager.build_context()` monta:
 
-1. A consulta combina a mensagem atual + um trecho curto da conversa + nomes
-   de rostos reconhecidos pelo `face_recognition`.
-2. Candidatos vêm de três fontes: FTS5 (lexical), embeddings (semântica) e
-   entidades (rosto/pessoa).
-3. O ranking mistura semelhança semântica, sobreposição lexical, importância,
-   recência e vínculo com a entidade reconhecida.
-4. Só as melhores memórias são formatadas, truncadas e limitadas por
-   `MEMORY_RAG_TOKEN_BUDGET` (chat) ou `MEMORY_PHOTO_TOKEN_BUDGET` (fotos no
-   agente de voz).
+```text
+=== CURRENT STATE ===
+Data/hora atual: 11/11/2026 22:15 -03 (America/Sao_Paulo)
+Pessoas visíveis agora: João
+Conversa recente (sessão atual): ...
+Tarefa ativa: ...
 
-Sem consulta e sem entidade, `recall` retorna vazio: a memória nunca é
-despejada inteira.
+=== EPISODIC MEMORIES ===
+- [evento] Em 10/11/2026 (ontem): João: João esteve na sala
 
-## Embeddings
+=== SEMANTIC KNOWLEDGE ===
+- [fato] Vigente desde 02/11/2026: João: trabalha na empresa Y
 
-- Primário: Gemini (`gemini-embedding-001`, configurável). O **texto** da
-  memória é enviado ao Gemini para gerar o vetor; imagens e rostos nunca são
-  enviados pelo reconhecimento facial.
-- Fallback local: hashing de palavras + trigramas, sem rede.
-- Cada vetor guarda o provider que o gerou; vetores de providers diferentes
-  nunca são comparados.
-- Para operar 100% offline, use `MEMORY_EMBEDDINGS_ENABLED=false` (busca
-  lexical FTS5 + hashing local).
+=== FUTURE PLANS ===
+- [plano] Para 18/11/2026 (em 7 dias): casa: Comprar café (não realizado)
+```
+
+O system prompt reforça:
+
+> Somente CURRENT STATE representa o estado atual do ambiente e da sessão.
+> Memórias episódicas representam acontecimentos passados. Conhecimento
+> semântico representa informações armazenadas cuja validade deve ser
+> respeitada. Planos representam intenções futuras, não acontecimentos
+> realizados. Nunca transforme uma memória histórica em observação presente.
+
+A data/hora atual (fuso `America/Sao_Paulo`) também é injetada no prompt.
+
+## Recuperação temporal
+
+`recall()` interpreta a intenção da consulta:
+
+- **agora / atualmente / neste momento** → estado vigente e fatos/preferências;
+  eventos passados e planos futuros não entram como “agora”;
+- **hoje / ontem / semana passada / mês passado** → eventos na janela;
+- **futuro / amanhã / vou fazer** → planos e tarefas com data futura;
+- **o que aconteceu com X?** → episódica + semântica;
+- **sem pista temporal** → fatos/preferências vigentes + eventos recentes.
+
+O ranking mistura similaridade semântica, similaridade lexical (FTS5),
+importância, recência, vínculo com a entidade e aderência temporal. Memórias
+`superseded`/`expired` ficam fora por padrão; `include_history=True` as mostra
+para consultas históricas.
+
+Memórias com `verification_status='inferred'` recebem rótulo
+`(inferido, confiança 0.xx)` e nunca são apresentadas como fato confirmado.
+
+## Working Memory (`memory/working.py`)
+
+- `add_turn(role, text)` — histórico recente da sessão.
+- `set_state(key, value, ttl_seconds=...)` — estado atual/tarefa ativa.
+- `set_people(names)` / `current_people()` — presença com TTL curto (120 s).
+- `snapshot()` — visão serializável para o `CURRENT STATE`.
+- TTL global (padrão 1800 s) limpa a sessão sozinho.
+
+O agente de voz e o chat alimentam a working memory com cada turno finalizado.
+
+## Supersessão (informação que mudou)
+
+Nunca sobrescrever silenciosamente:
+
+```python
+remember("João trabalha na empresa Y", memory_type="fact",
+         memory_id=old_id, supersede=True, valid_from="2026-11-02")
+```
+
+O registro antigo vira `status='superseded'` com `valid_until` preenchido; o
+novo recebe `supersedes_id` e `valid_from`. O histórico continua consultável.
+
+## Consolidação automática (`memory/consolidate.py`)
+
+A cada ~10 turnos (`MEMORY_CONSOLIDATE_EVERY_TURNS`) ou no encerramento, um
+modelo econômico propõe memórias. Uma camada determinística valida:
+
+- data (não inventa; inválida vira `unknown`);
+- tipo temporal;
+- origem e confiança (consolidação é `inferred` por padrão);
+- duplicidade (fingerprint + atualização);
+- supersessão (só IDs ativos);
+- controle de turnos já processados (`memory_meta`) para não duplicar.
 
 ## Ferramentas da IA
 
 | Ferramenta | Uso |
 |---|---|
-| `remember_memory(content, kind, subject, tags, importance, memory_id)` | guarda ou atualiza um fato |
-| `recall_memory(query, kind, limit)` | busca poucas memórias relevantes |
-| `forget_memory(memory_id, query)` | remove, somente quando o usuário pedir |
+| `remember_memory(...)` | guarda/atualiza; aceita `memory_type`, `when`, `event_end`, `valid_from`, `valid_until`, `expires_at`, `confidence`, `verification_status`, `supersede` |
+| `recall_memory(query, time_range, include_history)` | busca com janela temporal |
+| `forget_memory(...)` | remove somente quando o usuário pedir |
 
 ## Configuração
 
@@ -78,6 +154,22 @@ MEMORY_PHOTO_TOKEN_BUDGET=160
 MEMORY_RAG_MIN_SCORE=0.20
 MEMORY_RECENCY_HALF_LIFE_DAYS=45
 MEMORY_MAX_CONTENT_CHARS=700
+MEMORY_WORKING_TTL_SEC=1800
+MEMORY_CONSOLIDATE_EVERY_TURNS=10
+MEMORY_CONSOLIDATION_MODEL=gemini-3.1-flash-lite
 ```
 
 Para apagar tudo, pare os processos e remova `data/memory.db`.
+
+## Testes
+
+```bash
+cd /root/skynet
+python3 tests/test_memory_rag.py
+python3 tests/test_memory_temporal.py
+```
+
+Cobrem: pessoa vista ontem não é presente hoje, pessoa visível agora é
+presente, fato antigo não é atual, supersessão preserva histórico, plano
+futuro não é concluído, memória sem data não ganha data inventada, inferência
+não vira fato confirmado e consolidação não duplica registros.

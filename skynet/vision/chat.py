@@ -29,7 +29,9 @@ import argparse
 import json
 import logging
 import sys
+import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -38,6 +40,7 @@ from google import genai
 from google.genai import errors, types
 
 from memory import MEMORY_DECLARATIONS, MemoryManager, MemoryTool
+from memory.timeutil import TZ_NAME, format_now
 
 from .config import ConfigError, Settings, load_settings, mask_url
 from .tools.camera_tool import CameraTool, CAPTURE_DECLARATION
@@ -152,8 +155,13 @@ class TextChat:
         )
         self.memory_tool = MemoryTool(self.memory)
         self.history: list[types.Content] = []
+        self._session_id = uuid.uuid4().hex
+        self._turns_since_consolidation = 0
+        self.system_instruction = (
+            f"{SYSTEM_INSTRUCTION}\n\nData/hora atual: {format_now()} ({TZ_NAME})."
+        )
         self.config = types.GenerateContentConfig(
-            system_instruction=SYSTEM_INSTRUCTION,
+            system_instruction=self.system_instruction,
             tools=[
                 types.Tool(
                     function_declarations=[
@@ -321,10 +329,12 @@ class TextChat:
     def _memory_context(self, text: str = "", people: Optional[list] = None) -> str:
         if not self.memory_tool.available:
             return ""
+        # Presença só entra quando vem de uma foto atual (people explícito).
+        # `self.camera.last_faces` pode ser antigo e não é estado atual.
         return self.memory.build_context(
             text,
             conversation=self._conversation_text(),
-            people=people if people is not None else self._known_people(),
+            people=people,
         )
 
     def _people_memory_hint(self, payload: dict) -> str:
@@ -341,6 +351,9 @@ class TextChat:
     # ------------------------------------------------------------------
     def ask(self, text: str) -> str:
         user_content = types.Content(role="user", parts=[types.Part(text=text)])
+        if getattr(self, "memory", None) is not None:
+            self.memory.working.add_turn("user", text)
+            self.memory.working.set_state("active_task", text, ttl_seconds=600)
         memory_context = self._memory_context(text)
         request_parts = []
         if memory_context:
@@ -672,11 +685,33 @@ class TextChat:
             self.history.append(
                 types.Content(role="model", parts=[types.Part(text=answer)])
             )
+        if getattr(self, "memory", None) is not None:
+            self.memory.working.add_turn("assistant", answer)
+            every = getattr(self.memory.config, "consolidate_every_turns", 10)
+            self._turns_since_consolidation = (
+                getattr(self, "_turns_since_consolidation", 0) + 1
+            )
+            if (
+                self._turns_since_consolidation >= every
+                and getattr(self.memory, "available", False)
+            ):
+                self._turns_since_consolidation = 0
+                text = self._conversation_text(4000)
+                session_id = getattr(self, "_session_id", "chat")
+                threading.Thread(
+                    target=self.memory.consolidate,
+                    args=(text,),
+                    kwargs={"session_id": session_id},
+                    daemon=True,
+                ).start()
         self._trim_history()
         return answer
 
     def clear(self) -> None:
         self.history.clear()
+        self._turns_since_consolidation = 0
+        if getattr(self, "memory", None) is not None:
+            self.memory.working.reset()
 
     def close(self) -> None:
         with_close = getattr(self.client, "close", None)

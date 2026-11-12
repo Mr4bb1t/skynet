@@ -70,6 +70,9 @@ class MemoryConfig:
     min_score: float = 0.20
     half_life_days: float = 45.0
     max_content_chars: int = 700
+    working_ttl_sec: int = 1800
+    consolidate_every_turns: int = 10
+    consolidation_model: str = "gemini-3.1-flash-lite"
 
     @classmethod
     def from_env(cls) -> "MemoryConfig":
@@ -103,5 +106,15 @@ class MemoryConfig:
             ),
             max_content_chars=max(
                 120, min(4000, _env_int("MEMORY_MAX_CONTENT_CHARS", 700))
+            ),
+            working_ttl_sec=max(
+                60, min(7200, _env_int("MEMORY_WORKING_TTL_SEC", 1800))
+            ),
+            consolidate_every_turns=max(
+                2, min(100, _env_int("MEMORY_CONSOLIDATE_EVERY_TURNS", 10))
+            ),
+            consolidation_model=_env(
+                "MEMORY_CONSOLIDATION_MODEL",
+                _env("GEMINI_TEXT_MODEL", "gemini-3.1-flash-lite"),
             ),
         )

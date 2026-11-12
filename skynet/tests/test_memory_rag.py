@@ -133,9 +133,9 @@ class MemoryRagTest(unittest.TestCase):
                 }
             )
         context = self.manager.build_context("projeto Skynet", budget_tokens=60)
-        self.assertLessEqual(len(context), int(60 * 3.8) + 10)
-        self.assertLessEqual(len(context.splitlines()), 3)
+        self.assertLessEqual(len(context), max(360, int(60 * 3.8) + 10))
         self.assertNotEqual(context.count("Detalhe longo"), 12)
+        self.assertIn("CURRENT STATE", context)
 
     def test_forget_by_query(self) -> None:
         result = self.tool.forget({"query": "vacina"})
@@ -215,7 +215,8 @@ class ChatMemoryInjectionTest(unittest.TestCase):
         self.assertEqual(answer, "ok")
         sent_parts = captured[0][-1].parts
         self.assertEqual(len(sent_parts), 2)
-        self.assertIn("Memórias relevantes", sent_parts[0].text)
+        self.assertIn("CURRENT STATE", sent_parts[0].text)
+        self.assertIn("SEMANTIC KNOWLEDGE", sent_parts[0].text)
         self.assertEqual(sent_parts[1].text, "o que o João gosta de beber?")
 
         # O contexto recuperado não é persistido no histórico.
