@@ -211,7 +211,11 @@ DEFAULT_EMBODIED_INSTRUCTION = (
 
     "## RECONHECIMENTO DE PESSOAS\n"
     "Toda foto chega com um JSON de reconhecimento facial. Use para chamar as pessoas pelo nome/apelido. "
-    "Não leia o JSON em voz alta. Se aparecer rosto desconhecido, pergunte quem é de forma natural.\n\n"
+    "Não leia o JSON em voz alta. Se aparecer rosto desconhecido, pergunte quem é de forma natural.\n"
+    "- O JSON traz `confidence` (0–1) por rosto. Confiança alta (>=0.75): pode afirmar o nome. "
+    "Entre 0.60 e 0.75: diga 'parece ser'. Abaixo de 0.60: trate como incerto/desconhecido e pergunte; "
+    "não invente identidade. `known=false` nunca vira nome.\n"
+    "- Presença AGORA vem só da foto atual, nunca de uma memória antiga de reconhecimento.\n\n"
 
     "## MEMÓRIA DE LONGO PRAZO\n"
     "- Você tem memória persistente com busca semântica (RAG). Use `remember_memory` para guardar fatos "
@@ -696,6 +700,7 @@ class VoiceAgent:
                         "name": person.get("name", ""),
                         "nickname": person.get("nickname", ""),
                         "person_id": person.get("person_id"),
+                        "confidence": item.get("confidence"),
                     }
                 )
         return people
@@ -706,17 +711,27 @@ class VoiceAgent:
             return ""
         people = self._people_from_faces(faces)
         conversation = self._conversation_text() if include_conversation else ""
+        try:
+            min_conf = float(os.getenv("FACE_PRESENCE_MIN_CONFIDENCE", "0.6"))
+        except ValueError:
+            min_conf = 0.6
+        present = [
+            item
+            for item in people
+            if item.get("confidence") is None
+            or float(item.get("confidence") or 0.0) >= min_conf
+        ]
         # Presença atual: mesmo quando ninguém é reconhecido, limpa a lista.
-        names = [str(item.get("name", "")) for item in people if item.get("name")]
+        names = [str(item.get("name", "")) for item in present if item.get("name")]
         working = getattr(self.long_memory, "working", None)
         if working is not None:
             working.set_people(names)
-        if not people and not conversation:
+        if not present and not conversation:
             return ""
         return self.long_memory.build_context(
             "",
             conversation=conversation,
-            people=people,
+            people=present,
             budget_tokens=self.long_memory.config.photo_token_budget,
         )
 

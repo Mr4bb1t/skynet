@@ -229,14 +229,9 @@ O modelo de texto é configurado por `GEMINI_TEXT_MODEL`. O padrão é
 
 ### Memória de pessoas (face recognition local)
 
-O chat reconhece pessoas localmente, sem enviar rostos para a nuvem:
-
-- OpenCV Haar detecta os rostos (rápido no ARM);
-- dlib/face_recognition gera um embedding de 128 dimensões;
-- o embedding é comparado com o SQLite (`data/people.db`);
-- as fotos ficam em `data/people/`.
-
-**Toda foto enviada ao modelo** leva junto um JSON:
+O reconhecimento é local: **embeddings e fotos de referência não saem do box**.
+A foto atual da câmera continua sendo enviada ao modelo (é a percepção visual),
+acompanhada do JSON abaixo:
 
 ```json
 {
@@ -244,6 +239,8 @@ O chat reconhece pessoas localmente, sem enviar rostos para a nuvem:
     {
       "face_index": 0,
       "known": true,
+      "confidence": 0.832,
+      "match_confidence": 0.832,
       "distance": 0.41,
       "bbox": [210, 60, 120, 120],
       "person": {
@@ -256,9 +253,20 @@ O chat reconhece pessoas localmente, sem enviar rostos para a nuvem:
   ],
   "unknown_faces": 0,
   "faces": 1,
+  "threshold": 0.6,
   "memory": "ok"
 }
 ```
+
+- `confidence` (0–1) é a confiança na identidade: logística centrada no
+  `FACE_MATCH_THRESHOLD` (distância 0 → ~0.99; no limiar → 0.50). Para rosto
+  desconhecido vale `0.0`.
+- `match_confidence` é a confiança do melhor candidato mesmo abaixo do limiar
+  (útil para saber se era "quase" alguém conhecido).
+- O prompt orienta: `>=0.75` pode afirmar o nome; `0.60–0.75` “parece ser”;
+  `<0.60` tratar como incerto/desconhecido.
+- `FACE_PRESENCE_MIN_CONFIDENCE` (padrão `0.6`) define a confiança mínima para
+  um rosto entrar como “presente agora” no `CURRENT STATE`.
 
 Ferramentas de memória:
 

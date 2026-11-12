@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 import threading
 import time
@@ -307,6 +308,7 @@ class TextChat:
                         "name": getattr(face, "name", ""),
                         "nickname": getattr(face, "nickname", ""),
                         "person_id": getattr(face, "person_id", None),
+                        "confidence": getattr(face, "confidence", None),
                     }
                 )
         return people
@@ -322,6 +324,7 @@ class TextChat:
                         "name": person.get("name", ""),
                         "nickname": person.get("nickname", ""),
                         "person_id": person.get("person_id"),
+                        "confidence": item.get("confidence"),
                     }
                 )
         return people
@@ -344,7 +347,19 @@ class TextChat:
         people = self._people_from_payload(payload)
         if not people:
             return ""
-        return self.memory.build_context("", conversation="", people=people)
+        try:
+            min_conf = float(os.getenv("FACE_PRESENCE_MIN_CONFIDENCE", "0.6"))
+        except ValueError:
+            min_conf = 0.6
+        present = [
+            item
+            for item in people
+            if item.get("confidence") is None
+            or float(item.get("confidence") or 0.0) >= min_conf
+        ]
+        if not present:
+            return ""
+        return self.memory.build_context("", conversation="", people=present)
 
     # ------------------------------------------------------------------
     # API pública

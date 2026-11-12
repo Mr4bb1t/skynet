@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import sqlite3
 import threading
 import time
@@ -45,6 +46,27 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def distance_confidence(distance: Optional[float], threshold: float) -> Optional[float]:
+    """Converte distância facial (menor = melhor) em confiança 0..1.
+
+    Logística centrada no limiar de decisão:
+      * distância 0        -> ~0.99
+      * distância = limiar -> 0.50 (fronteira)
+      * distância 1.5x limiar -> ~0.05
+
+    É uma calibração monotônica e explicável, não uma probabilidade estatística.
+    """
+    if distance is None:
+        return None
+    try:
+        value = float(distance)
+    except (TypeError, ValueError):
+        return None
+    limit = max(0.05, float(threshold or 0.6))
+    delta = max(-50.0, min(50.0, 8.0 * (value - limit)))
+    return 1.0 / (1.0 + math.exp(delta))
+
+
 @dataclass
 class DetectedFace:
     face_index: int
@@ -56,6 +78,8 @@ class DetectedFace:
     nickname: str = ""
     notes: str = ""
     distance: Optional[float] = None
+    confidence: float = 0.0
+    match_confidence: Optional[float] = None
     known: bool = False
 
 
@@ -280,12 +304,14 @@ class PersonMemory:
                 best = int(np.argmin(distances))
                 best_distance = distances[best]
                 face.distance = best_distance
+                face.match_confidence = distance_confidence(best_distance, self.threshold)
                 if best_distance <= self.threshold:
                     person = known[best]["person"]
                     face.person_id = int(person["person_id"])
                     face.name = person["name"]
                     face.nickname = person["nickname"]
                     face.notes = person["notes"]
+                    face.confidence = face.match_confidence or 0.0
                     face.known = True
                     matched_ids.add(face.person_id)
             faces.append(face)
@@ -312,6 +338,12 @@ class PersonMemory:
                 {
                     "face_index": face.face_index,
                     "known": face.known,
+                    "confidence": round(face.confidence, 3),
+                    "match_confidence": (
+                        None
+                        if face.match_confidence is None
+                        else round(face.match_confidence, 3)
+                    ),
                     "distance": (
                         None if face.distance is None else round(face.distance, 3)
                     ),
@@ -324,6 +356,7 @@ class PersonMemory:
             "people": public_people,
             "unknown_faces": sum(1 for face in faces if not face.known),
             "faces": len(faces),
+            "threshold": round(self.threshold, 3),
             "memory": "ok",
         }
         return FaceAnalysis(faces=faces, public=public)
