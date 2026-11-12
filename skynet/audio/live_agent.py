@@ -649,11 +649,12 @@ class VoiceAgent:
                     "active_task", text, ttl_seconds=600
                 )
         self._turns_since_consolidation += 1
+        every = getattr(self.long_memory.config, "consolidate_every_turns", 10) if self.long_memory else 0
         if (
-            self.long_memory is not None
+            every > 0
+            and self.long_memory is not None
             and getattr(self.long_memory, "available", False)
-            and self._turns_since_consolidation
-            >= getattr(self.long_memory.config, "consolidate_every_turns", 10)
+            and self._turns_since_consolidation >= every
         ):
             self._turns_since_consolidation = 0
             try:
@@ -1288,6 +1289,7 @@ class VoiceAgent:
             not self._final_consolidation_started
             and self.long_memory is not None
             and getattr(self.long_memory, "available", False)
+            and getattr(self.long_memory.config, "consolidate_every_turns", 10) > 0
             and self._conversation
         ):
             self._final_consolidation_started = True

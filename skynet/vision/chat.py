@@ -692,7 +692,8 @@ class TextChat:
                 getattr(self, "_turns_since_consolidation", 0) + 1
             )
             if (
-                self._turns_since_consolidation >= every
+                every > 0
+                and self._turns_since_consolidation >= every
                 and getattr(self.memory, "available", False)
             ):
                 self._turns_since_consolidation = 0

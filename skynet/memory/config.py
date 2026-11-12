@@ -111,7 +111,7 @@ class MemoryConfig:
                 60, min(7200, _env_int("MEMORY_WORKING_TTL_SEC", 1800))
             ),
             consolidate_every_turns=max(
-                2, min(100, _env_int("MEMORY_CONSOLIDATE_EVERY_TURNS", 10))
+                0, min(100, _env_int("MEMORY_CONSOLIDATE_EVERY_TURNS", 10))
             ),
             consolidation_model=_env(
                 "MEMORY_CONSOLIDATION_MODEL",
