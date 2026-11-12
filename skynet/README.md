@@ -1,227 +1,242 @@
-# 🤖 Skynet Robot - Chat com Visão & PTZ
+# <p align="center">🤖 SKYNET ROBOT</p>
 
-O aplicativo principal agora é um **chat de texto**. Câmera e PTZ são
-**ferramentas que a IA usa sob demanda**: ela só tira foto ou move a cabeça
-quando a conversa exigir. O controle manual de PTZ continua disponível em
-`ptz_console.py` para calibração e operação direta.
+<p align="center">
+  <strong>Agente Físico Conversacional Multimodal com Gemini Live, Visão Computacional, PTZ Motorizado e Memória Temporal RAG</strong>
+</p>
 
-> ⚠️ **Importante:** esta câmera (Gwelltimes, fw 32.00.47) **não implementa movimento
-> contínuo** por ONVIF. Veja a seção [Limitação do firmware](#-limitação-do-firmware)
-> para as medições e o que foi descartado.
+<p align="center">
+  <img src="docs/images/banner.png" alt="Skynet Robot Hero Banner" width="100%">
+</p>
 
-## 📂 Arquitetura do Projeto
+<p align="center">
+  <a href="https://python.org"><img src="https://img.shields.io/badge/Python-3.9%20%7C%203.11-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python"></a>
+  <a href="https://ai.google.dev"><img src="https://img.shields.io/badge/Google_Gemini-Live_3.8-4285F4?style=for-the-badge&logo=google&logoColor=white" alt="Gemini Live"></a>
+  <a href="https://webrtc.org"><img src="https://img.shields.io/badge/Audio-WebRTC_AEC3_C++-333333?style=for-the-badge&logo=cplusplus&logoColor=white" alt="WebRTC AEC3"></a>
+  <a href="https://onvif.org"><img src="https://img.shields.io/badge/Hardware-ONVIF_PTZ-orange?style=for-the-badge" alt="ONVIF PTZ"></a>
+  <a href="https://www.sqlite.org"><img src="https://img.shields.io/badge/Memory-RAG_FTS5_%2B_Temporal_v2-003B57?style=for-the-badge&logo=sqlite&logoColor=white" alt="Temporal RAG"></a>
+  <a href="https://debian.org"><img src="https://img.shields.io/badge/OS-Debian_ARM_TV_Box-A81D33?style=for-the-badge&logo=debian&logoColor=white" alt="Debian"></a>
+  <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License">
+</p>
+
+---
+
+## ⚡ Visão Geral
+
+O **SKYNET Robot** transforma um TV Box barato (Debian armhf/arm64) e uma câmera IP PTZ comum (Yoosee / Gwelltimes) em um **robô físico inteligente e consciente do ambiente**.
+
+Alimentado pelo **Google Gemini Live (3.8)**, o Skynet processa áudio bidirecional em tempo real, enxerga através da câmera via RTSP sob demanda ou continuamente, controla motores de Pan e Tilt (PTZ) via ONVIF, reconhece moradores por biometria facial local e preserva uma **memória temporal de longo prazo** estruturada com RAG híbrido.
+
+### 🌟 Destaques Principais
+
+- 🎙️ **Conversação por Voz Real-Time:** Conexão WebSocket persistente com o Gemini Live (áudio in/out ultrarrápido).
+- 🎧 **Cancelamento de Eco Acústico WebRTC AEC3 (C++ nativo):** Suporte nativo a *barge-in* (interromper o robô enquanto ele fala) com cancelamento da própria voz em tempo real no TV Box.
+- 👁️ **Visão Computacional & Biometria Facial:** Detecção e reconhecimento facial local com persistência SQLite (`data/people.db`), scores de confiança e injeção contextual em fotos para a IA.
+- 🦾 **Controle Motorizado PTZ Adaptativo:** Engenharia reversa ONVIF SOAP contornando as limitações do firmware Yoosee através de micro-passos calibrados (~8°/passo) e cadência de pulso.
+- 🧠 **Memória Temporal RAG v2 (4 Camadas):** Separação cognitiva estrita entre *Estado Atual (RAM)*, *Memórias Episódicas (passado datado)*, *Conhecimento Semântico (fatos vigentes com supersessão)* e *Planos Futuros (tarefas pendentes)*.
+- 🕒 **Sincronizador Inteligente de Relógio:** Auto-sincronização de data/hora (NTP com fallback HTTP Date) e fuso (`America/Sao_Paulo`) no boot, eliminando erros de certificado TLS em TV Boxes sem bateria de RTC.
+- 🖥️ **CLI Global & Gerenciamento de Serviço:** Comando global `skynet`, sessões desacopladas em `tmux`, logs em tempo real, TUI de setup e watchdog de auto-reinicialização.
+
+---
+
+## 🏗️ Arquitetura do Sistema
+
+```mermaid
+flowchart TD
+    subgraph Hardware ["Ambiente Físico & Hardware"]
+        CAM["📷 Câmera IP Yoosee / ONVIF"]
+        BOX["📺 TV Box (Debian ARM)"]
+        MIC["🎤 Microfone (USB ou RTSP)"]
+        SPK["🔊 Caixa de Som (P2 / AV / USB)"]
+    end
+
+    subgraph AudioEngine ["Engenharia de Áudio"]
+        AEC["⚙️ WebRTC AEC3 (libskynet_aec.so)"]
+        REF["Far-End Speaker Ref"]
+        GAIN["Ganho Digital (mic_gain)"]
+    end
+
+    subgraph CoreLoop ["Skynet Core Loop (main.py)"]
+        LIVE["🌐 Gemini Live Client (WS)"]
+        VOICE["🎙️ Voice Agent"]
+        FC["⚡ Function Calling Dispatcher"]
+    end
+
+    subgraph PerceptionVision ["Percepção & Visão"]
+        RTSP["FFmpeg RTSP Stream Buffer"]
+        FACE["👤 Biometria Facial Local (people.db)"]
+        JPG["Image Processor (Resize / JPEG)"]
+        PTZ_CTRL["🦾 ONVIF PTZ Controller"]
+    end
+
+    subgraph MemoryEngine ["Memória Temporal RAG v2"]
+        WM["Working Memory (RAM - TTL 30m)"]
+        EP["Episodic (Eventos Passados Datados)"]
+        SEM["Semantic (Fatos Vigentes & Superseded)"]
+        PL["Plans (Intenções & Tarefas Futuras)"]
+        RAG["Recuperador Híbrido: Vetores + SQLite FTS5"]
+    end
+
+    CAM -- "RTSP /onvif2" --> RTSP
+    MIC --> GAIN --> AEC
+    SPK <-- "Áudio PCM 24kHz" -- LIVE
+    SPK -. "Loopback Ref" .-> REF --> AEC
+    AEC --> VOICE --> LIVE
+    LIVE <== "WebSocket Seguro" ==> CoreGemini["☁️ Google Gemini Live API"]
+    
+    LIVE --> FC
+    FC -->|"capture_image"| RTSP
+    RTSP --> JPG --> FACE --> FC
+    FC -->|"move_camera"| PTZ_CTRL --> CAM
+    FC <-->|"remember / recall"| MemoryEngine
+    MemoryEngine -->|"Contexto em 4 Blocos"| LIVE
+```
+
+---
+
+## 🧠 Arquitetura de Memória Temporal v2
+
+> *"Memória não é percepção. Percepção não é conhecimento. Conhecimento não é estado atual."*
+
+Para impedir que a IA alucine eventos do passado como se estivessem acontecendo agora, o contexto é entregue em **4 seções temporais explícitas**:
+
+| Camada | Escopo | Armazenamento | Injeção no Prompt |
+|---|---|---|---|
+| **Working Memory** | O que está acontecendo agora (últimas falas, tarefa ativa, pessoas vistas no frame) | RAM (`memory/working.py`), TTL 30 min | `=== CURRENT STATE ===` |
+| **Episodic** | Acontecimentos passados com data exata (`event_time`) | SQLite (`memory_type='event'`) | `=== EPISODIC MEMORIES ===` |
+| **Semantic** | Fatos, preferências, relacionamentos e rotinas com validade temporal | SQLite (`fact`, `preference`, `routine`) | `=== SEMANTIC KNOWLEDGE ===` |
+| **Future Plans** | Compromissos e tarefas futuras com status (`active`, `done`, `cancelled`) | SQLite (`plan`, `task`) | `=== FUTURE PLANS ===` |
+
+Quando um fato se atualiza (ex: mudança de emprego ou cidade), o registro anterior não é apagado: torna-se `superseded` com data de expiração, e um novo registro é ativado com `valid_from`. Para documentação técnica aprofundada, veja [`memory/README.md`](memory/README.md).
+
+---
+
+## 📂 Arquitetura do Pacote Skynet
 
 ```
-/root/skynet/
-├── main.py                   # ENTRADA PRINCIPAL: chat de texto com ferramentas
-├── ptz_console.py            # Console manual de PTZ (legado/calibração)
-├── config.py                 # IPs, credenciais e calibração do motor
-├── calibrate.py              # Assistente de calibração graus/passo
-├── camera/
-│   ├── ptz.py                # Controlador PTZ por pulsos ONVIF
-│   ├── vision.py             # Visão legada (snapshots/buffer)
-│   └── tracker.py            # Tracker legado (não usado pelo chat)
-├── core/
-│   └── commander.py          # API de alto nível legada (PTZ + visão)
-├── audio/
-│   └── live_agent.py         # Agente de voz Gemini Live (áudio + visão + PTZ)
-├── memory/                   # Memória de longo prazo com RAG
-│   ├── store.py              # SQLite + FTS5 + vetores
-│   ├── rag.py                # Recuperação híbrida e orçamento de tokens
-│   ├── tools.py              # remember/recall/forget para a IA
-│   └── README.md             # Documentação da memória
-├── vision/
-│   ├── chat.py               # Chat principal e loop de ferramentas
-│   ├── tools/
-│   │   ├── camera_tool.py    # Ferramenta capture_image
-│   │   └── ptz_tool.py       # Ferramentas move_camera / stop_camera
-│   ├── main.py               # Pipeline Live contínuo e testes 1..8
-│   ├── camera_capture.py     # FFmpeg/RTSP persistente, buffer de 1 frame
-│   ├── image_processor.py    # Resize + JPEG (LOW/BALANCED/DETAIL)
-│   ├── image_heartbeat.py    # Envio visual ~1 FPS, sem backlog
-│   ├── gemini_live_client.py # Uma conexão Live (envio/recepção)
-│   ├── session_manager.py    # Reconexão, backoff, Session Resumption, GoAway
-│   └── diagnostics.py        # Métricas, resumo periódico e CSV
-├── tests/
-├── .env.example              # Modelo de configuração (sem segredos)
-└── requirements.txt
+skynet/
+├── main.py                   # ENTRADA PRINCIPAL: Agente de Voz Gemini Live
+├── voice_chat.py             # Launcher alternativo para conversação por voz
+├── ptz_console.py            # Console de calibração e controle manual de PTZ
+├── calibrate.py              # Assistente interativo de medição graus/passo
+├── config.py                 # Configurações de rede, hardware e motor
+├── audio/                    # Módulo de áudio em tempo real
+│   ├── live_agent.py         # Agente de voz Gemini Live (áudio + visão + PTZ)
+│   ├── aec.py                # Pipeline WebRTC AEC3 (Python wrapper)
+│   ├── player.py             # Reprodução ALSA em thread dedicada
+│   ├── sources.py            # Captura de microfone (ALSA USB ou RTSP Câmera)
+│   └── native/
+│       ├── skynet_aec.cpp    # Cancelador de eco nativo C++ (WebRTC AEC3)
+│       └── build_aec.sh      # Script de compilação da lib .so
+├── camera/                   # Módulo de hardware da câmera
+│   ├── ptz.py                # Controlador de pulsos e cadência ONVIF
+│   ├── vision.py             # Capturas e snapshots legados
+│   └── tracker.py            # Rastreamento de alvos
+├── core/                     # Utilitários de infraestrutura
+│   ├── alsa_detector.py      # Scan automático de placas de som ALSA
+│   ├── config_tui.py         # Menu interativo TUI para setup no terminal
+│   ├── env_manager.py        # Leitura e gravação de .env
+│   └── time_sync.py          # Sincronização prévia de relógio (NTP/HTTP)
+├── memory/                   # Memória temporal de longo prazo
+│   ├── store.py              # SQLite v2 + FTS5 + temporal fields
+│   ├── working.py            # Memória de trabalho (RAM, TTL 30m)
+│   ├── rag.py                # Recuperação híbrida com ranking temporal
+│   ├── consolidate.py        # Consolidação periódica da conversa
+│   ├── tools.py              # Ferramentas da IA (remember, recall, forget)
+│   └── README.md             # Guia técnico do subsistema de memória
+├── scripts/                  # Scripts operacionais do TV Box
+│   ├── skynet                # CLI global do robô (com suporte a TMUX)
+│   ├── install_service.sh    # Instalador de serviço SysVinit / Systemd
+│   ├── skynet.service        # Unidade Systemd
+│   ├── skynet.init           # Script de serviço SysVinit
+│   └── sync_time.py          # Script de sincronização de relógio no boot
+├── tests/                    # Bateria de testes de áudio, PTZ, visão e RAG
+└── vision/                   # Pipeline visual contínuo e reconhecimento
+    ├── chat.py               # Chat de texto legado com function calling
+    ├── camera_capture.py     # Captura persistente FFmpeg RTSP (slot único)
+    ├── person_memory.py      # Reconhecimento facial local e biometria
+    ├── image_processor.py    # Processamento de imagem e resize dinâmico
+    ├── image_heartbeat.py    # Heartbeat visual a 1 FPS
+    └── tools/                # Ferramentas expostas ao Gemini
 ```
 
 ---
 
 ## 🚀 Como Executar
 
-### 1. Chat principal (texto + câmera + PTZ)
-Acesse o TV Box via SSH e execute:
+### 1. Conversação por Voz (Gemini Live)
+No terminal do TV Box:
 ```bash
-cd /root/skynet
+# Execução direta com o microfone padrão (câmera IP)
 python3 main.py
+
+# Usando microfone USB conectado diretamente ao TV Box
+python3 main.py --backend local --local-device default
+
+# Ativando streaming de visão contínua (1 FPS)
+python3 main.py --continuous-vision
 ```
 
-- A conversa normal é **somente texto**.
-- Se a resposta precisar de visão, a IA chama `capture_image` e recebe uma foto.
-- Se você pedir para girar/olhar/inclinar, ela chama `move_camera`.
-- Depois de mover, ela pode chamar `capture_image` para confirmar o que vê.
-- Comandos: `/foto`, `/parar`, `/pessoas`, `/memorias [termo]`, `/limpar`, `/sair`.
-
-> 🕒 **Relógio e fuso:** o box não tem RTC confiável. Ao iniciar, o wrapper
-> `skynet` roda `/root/sync_time.py` **antes** do `main.py`: busca a hora na
-> internet (NTP, com fallback HTTP `Date`), ajusta o relógio e aplica o fuso
-> `America/Sao_Paulo` (Londrina/PR). Sem isso o TLS do Gemini falha com
-> `certificate is not yet valid`. Para pular: `SKYNET_SKIP_TIME_SYNC=1`.
-
-Opções úteis:
+### 2. Gerenciador Global em Background (`skynet`)
 ```bash
-python3 main.py --no-camera          # chat somente texto
-python3 main.py --no-ptz             # desativa movimento PTZ
-python3 main.py --source video.mp4   # usa vídeo local em vez da câmera
-python3 main.py --model gemini-3.5-flash
-python3 main.py --save-photo /tmp/ultima.jpg
+skynet start      # Inicia o robô em segundo plano na sessão tmux 'skynet'
+skynet attach     # Abre o console interativo do robô (Ctrl+B depois D para sair)
+skynet status     # Verifica se o serviço está ativo
+skynet log        # Monitora os logs em tempo real
+skynet stop       # Finaliza a execução
+skynet tui        # Abre o menu interativo de configuração
 ```
 
-### 2. Console manual de PTZ (legado/calibração)
-O antigo `main.py` virou `ptz_console.py`:
+### 3. Modo Chat de Texto (Legado / Debug)
 ```bash
-cd /root/skynet
+python3 main.py --chat
+```
+- Conversa prioritariamente em texto.
+- A IA aciona `capture_image` e `move_camera` sob demanda.
+- Comandos disponíveis: `/foto`, `/parar`, `/pessoas`, `/memorias`, `/limpar`, `/sair`.
+
+### 4. Console Manual de PTZ & Calibração
+```bash
 python3 ptz_console.py
 ```
-- Digite `180` : gira ~180° à direita em passos.
-- Digite `-90` : gira ~90° à esquerda.
-- Digite `t30` : inclina ~30° para cima.
-- Digite `t-20` : inclina ~20° para baixo.
-- Teclas `W`, `A`, `S`, `D` : micro-passos (1 passo do motor).
-- `F` : captura foto instantânea.
-- `SCAN` : varredura de 180° com capturas.
-- `Q` : sai.
-
-### 3. Comandos diretos de PTZ (para automações)
-```bash
-python3 ptz_console.py --degrees 180
-python3 ptz_console.py --degrees -90
-python3 ptz_console.py --tilt 25
-python3 ptz_console.py --snapshot
-```
-
-### 4. Usando a API legada nos seus scripts (Python)
-```python
-from core.commander import RobotCommander
-
-robot = RobotCommander()
-foto = robot.turn_and_see(degrees=180)
-robot.nudge("left", steps=1)
-frame_bytes = robot.get_vision_frame()
-print(robot.ptz.last_steps, robot.ptz.last_degrees)
-```
-
-### 5. Pipeline de visão contínua (Gemini Live)
-O pacote `vision` também mantém o pipeline contínuo de captura + envio de
-imagens (máximo 1 FPS) para a Gemini Live API. Não há IA local.
-
-```bash
-cd /root/skynet
-pip3 install --break-system-packages -r requirements.txt   # ou use um venv
-cp .env.example .env && chmod 600 .env                     # preencha GEMINI_API_KEY
-python3 -m vision.main --test 3                            # conexão
-python3 -m vision.main --test 5 --seconds 30               # heartbeat ~1 FPS
-python3 -m vision.main --run                               # pipeline completo
-```
-
-O chat de texto e o **agente de voz** compartilham a **memória de pessoas**:
-reconhecimento facial local, banco SQLite em `data/people.db` e um JSON com as
-pessoas reconhecidas junto de cada foto enviada ao Gemini. No agente de voz o
-JSON acompanha a foto sob demanda (`capture_image`), a foto automática após
-movimentos do PTZ e os frames da visão contínua (a cada ~5 s). Ferramentas do
-chat: `remember_person`, `recall_person`, `list_people` e `forget_person`.
-
-Além das pessoas, existe uma **memória temporal de longo prazo com RAG** em
-`data/memory.db`: acontecimentos datados, fatos/preferências com validade,
-planos/tarefas futuras e uma **working memory** da sessão atual (RAM, TTL 30
-min). O contexto é entregue em quatro blocos explícitos — `CURRENT STATE`,
-`EPISODIC MEMORIES`, `SEMANTIC KNOWLEDGE` e `FUTURE PLANS` — para o modelo não
-confundir coisa velha com o agora. O conhecimento antigo não é sobrescrito:
-quando muda, o registro anterior vira histórico (`superseded`) e um novo entra
-com `valid_from`. A conversa também é consolidada automaticamente a cada ~10
-turnos. Veja [`memory/README.md`](memory/README.md).
-
-Documentação completa (configuração, testes 1–8, systemd, memória e
-diagnóstico): [`vision/README.md`](vision/README.md).
+- Digite `180` / `-90` para rotacionar em graus.
+- Digite `t30` / `t-20` para inclinar (Tilt).
+- Teclas `W`, `A`, `S`, `D`: micro-passos manuais.
+- `F`: snapshot instantâneo.
+- `SCAN`: varredura panorâmica com fotos.
 
 ---
 
-## 🎧 Áudio e cancelamento de eco (AEC3)
+## 🎧 Cancelamento de Eco Acústico (WebRTC AEC3)
 
-O agente de voz usa o áudio que está indo para o alto-falante como **referência**
-e aplica o **WebRTC AEC3** na captura do microfone antes de enviar ao Gemini.
-Assim a voz do próprio Skynet é removida do que o microfone ouve, o que permite
-**barge-in** (falar por cima enquanto ele responde).
+O agente de voz utiliza o áudio enviado para o alto-falante como **sinal de referência (far-end)** e processa a captura do microfone (**near-end**) com o motor nativo **WebRTC AEC3** (`libskynet_aec.so`).
 
-- Camada independente: `audio/aec.py` (referência far-end + captura near-end).
-- Backend nativo: `audio/native/skynet_aec.cpp` → `libskynet_aec.so` sobre
-  `webrtc-audio-processing` 1.3 (AEC3, sem GPU e 100% local).
-- Se a biblioteca nativa não estiver instalada, o áudio funciona normalmente
-  (passthrough) e o log avisa.
-- Instalação no box (compila uma vez, ~20-40 min em armhf):
-
+- Permite **barge-in**: você pode falar enquanto o Skynet está respondendo sem que a própria voz dele cause auto-interrupção ou microfonia.
+- Compilação direta no TV Box (sem necessidade de GPU):
 ```bash
-sudo bash /root/skynet/audio/native/build_aec.sh
-cd /root/skynet && python3 tests/test_aec_offline.py
+sudo bash audio/native/build_aec.sh
+python3 tests/test_aec_offline.py
 ```
-
-Configuração no `.env`: `AEC_ENABLED`, `AEC_DELAY_MS` (dica de atraso
-alto-falante→microfone) e `AEC_FAR_MAX_MS` (buffer de referência).
-
-Enquanto o AEC3 não está ativo, o código usa **half-duplex automático**
-(`AUDIO_HALF_DUPLEX=auto`): o microfone é silenciado durante a fala do robô
-para ele não se autointerromper. Quando o AEC3 entra, o modo volta a
-full-duplex e o barge-in funciona. Para forçar full-duplex: `AUDIO_HALF_DUPLEX=0`.
-
-> ⚠️ **Microfone da câmera:** ele abre uma segunda sessão RTSP no mesmo
-> firmware do vídeo e, nesta câmera, isso pode travar o RTSP inteiro (vídeo e
-> áudio param e ela passa a responder `405`). Para AEC e estabilidade, use
-> `AUDIO_INPUT_BACKEND=local` (microfone USB). Se a câmera travar, desligue e
-> ligue a alimentação dela. Se realmente for usar o mic da câmera, tente
-> `CAMERA_AUDIO_PATH=/onvif2` para separar da stream de vídeo.
+- Caso a biblioteca nativa não esteja compilada, o sistema opera automaticamente em modo **half-duplex inteligente** (`AUDIO_HALF_DUPLEX=auto`), silenciando temporariamente o microfone durante a fala da IA.
 
 ---
 
-## 📐 Calibração
+## ⚠️ Limitações Conhecidas de Hardware
 
-Cada comando ONVIF gira **um passo fixo do motor**. O padrão é `8.0°` por passo,
-estimado por análise de vídeo (≈14 px de deslocamento em quadro de 160 px).
-Para medir o valor real:
+Medições reais realizadas na câmera IP Yoosee (Gwelltimes, firmware 32.00.47):
 
-```bash
-python3 calibrate.py
-```
-
-O script dá 10 passos, pergunta quantos graus a cena andou e grava
-`PAN_DEGREES_PER_STEP` / `TILT_DEGREES_PER_STEP` no `config.py`.
+| Cenário | Comportamento Observado | Solução Adotada no Skynet |
+|---|---|---|
+| `ContinuousMove` ONVIF | Retorna HTTP 200, mas move apenas um micro-passo (~8°) e cessa | Converte graus em passos discretos e espaçados |
+| Taxa de comandos ONVIF | Comandos enviados com < 0.8s de intervalo são descartados pelo firmware | Cadência mínima de ~1.05s entre pulsos com buffer |
+| Áudio RTSP na Câmera | Abrir áudio e vídeo RTSP em conexões paralelas pode travar o serviço RTSP (HTTP 405) | Recomendado microfone USB local no TV Box (`AUDIO_INPUT_BACKEND=local`) |
+| Relógio de TV Boxes | Falta de bateria RTC causa perda da data/hora após desligamento | Sincronização obrigatória via `sync_time.py` antes de iniciar conexões TLS |
 
 ---
 
-## ⚠️ Limitação do firmware
+## 📄 Licença
 
-Medições feitas ao vivo contra `192.168.10.14` (substream RTSP + diff de frames):
+Distribuído sob a licença **MIT**. Veja o arquivo `LICENSE` para detalhes.
 
-| Teste | Resultado |
-|---|---|
-| `ContinuousMove` único | HTTP 200, mas gira **um passo fixo** (~8°) e para sozinho |
-| `Timeout` / duração | Ignorados |
-| Velocidade `0.03` a `1.0` | Passo constante (~13–15 px) — não altera o ângulo |
-| `Stop` real (SOAP) | Não trunca o passo; não devolve resposta (normal) |
-| `RelativeMove` | Conexão fechada (não suportado) |
-| `AbsoluteMove` / presets | Conexão fechada (não suportado) |
-| `GetStatus` / `GetConfigurationOptions` | Não implementados |
-| Taxa máxima | ~1 passo/segundo; comandos mais rápidos são descartados |
-| RTSP `SET_PARAMETER ptzCmd:*` | HTTP 200, sem movimento |
-| `USER_CMD_SET` | 405 Method Not Allowed |
-| Sessão RTSP (`SETUP`) | 400 Bad Request (câmera é broadcast) |
-| Portas TCP abertas | 21 (FTP quebrado), 554, 5000, 50000 (silenciosa) |
-
-O app da Yoosee parece fluido porque usa o protocolo P2P proprietário
-(IoTVideo/Gwell), cujo handshake exige um **access token da nuvem** — não é
-acessível só com a senha do dispositivo. Implementar isso localmente exigiria
-reproduzir a sessão P2P inteira, não apenas o ONVIF.
-
-**Consequência prática:** o código não finge mais movimento contínuo. Ele converte
-graus em passos e os espaça em ~1,05 s para a câmera não descartar comandos.
+<p align="center">
+  Desenvolvido por <strong><a href="https://github.com/Mr4bb1t">Mr4bb1t</a></strong>
+</p>
